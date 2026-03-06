@@ -160,6 +160,7 @@ tr:hover { background: rgba(0,212,255,0.03); }
       <span class="health-dot unknown" id="healthDot"></span> INIT
     </span>
     <button class="btn btn-secondary" id="btnPause" onclick="togglePause()">PAUSE</button>
+    <button class="btn" id="btnLiveMode" onclick="toggleLiveMode()" style="background:#2a1a1a;border:1px solid var(--red);color:var(--red);">PAPER MODE</button>
     <button class="btn btn-secondary" onclick="toggleSettings()">SETTINGS</button>
     <button class="btn btn-danger" onclick="closeAll()">CLOSE ALL</button>
     <button class="btn btn-warn" onclick="resetStats()">RESET</button>
@@ -299,12 +300,16 @@ tr:hover { background: rgba(0,212,255,0.03); }
         <input class="setting-input" id="set_hold_max_sec" type="number" step="1" value="30">
       </div>
       <div class="setting-row">
-        <span class="setting-label">Position $ size</span>
-        <input class="setting-input" id="set_position_size" type="number" step="1" value="10">
+        <span class="setting-label">Margin $</span>
+        <input class="setting-input" id="set_margin" type="number" step="1" value="5" oninput="updatePositionCalc()">
       </div>
       <div class="setting-row">
         <span class="setting-label">Leverage</span>
-        <input class="setting-input" id="set_leverage" type="number" step="1" value="2">
+        <input class="setting-input" id="set_leverage" type="number" step="1" value="2" oninput="updatePositionCalc()">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label" style="color:var(--text3)">Position = margin × lev</span>
+        <span id="positionCalc" style="font-weight:700;color:var(--cyan);font-size:0.8rem;">$10</span>
       </div>
       <div class="setting-row">
         <span class="setting-label">Max positions</span>
@@ -353,6 +358,25 @@ tr:hover { background: rgba(0,212,255,0.03); }
         <input class="setting-input" id="set_min_volume" type="number" step="100000" value="500000">
       </div>
     </div>
+    <div class="settings-group">
+      <div class="settings-group-title">OKX API KEYS</div>
+      <div class="setting-row">
+        <span class="setting-label">API Key</span>
+        <input class="setting-input" id="set_okx_api_key" type="password" placeholder="● ● ● ● ● ● ●" autocomplete="off">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Secret Key</span>
+        <input class="setting-input" id="set_okx_secret" type="password" placeholder="● ● ● ● ● ● ●" autocomplete="off">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Passphrase</span>
+        <input class="setting-input" id="set_okx_passphrase" type="password" placeholder="● ● ● ● ● ● ●" autocomplete="off">
+      </div>
+      <div class="setting-row" style="margin-top:8px;">
+        <span class="setting-label" id="okxKeyStatus" style="color:var(--muted);font-size:0.7rem;">loading...</span>
+        <button class="btn btn-primary" style="padding:3px 10px;font-size:0.7rem;" onclick="saveApiKeys()">SAVE KEYS</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -365,6 +389,9 @@ tr:hover { background: rgba(0,212,255,0.03); }
       <div style="display:flex;gap:6px;align-items:center;">
         <input id="addPairInput" placeholder="SYM" style="background:var(--bg4);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-family:inherit;font-size:0.68rem;width:60px;" onkeydown="if(event.key==='Enter')addPair()">
         <button class="btn btn-secondary" style="padding:3px 8px" onclick="addPair()">+ADD</button>
+        <button class="btn btn-secondary" onclick="exportPairs()">EXPORT</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('importFileInput').click()">IMPORT</button>
+        <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="importPairs(this)">
         <button class="btn btn-secondary" onclick="runScan()" id="btnScan">SCAN NOW</button>
       </div>
     </div>
@@ -484,11 +511,23 @@ function renderStatus(s) {
   const btc = s.btc_price || 0;
   document.getElementById('statBTC').textContent = '$' + btc.toLocaleString('en', {maximumFractionDigits: 0});
 
-  // Mode
+  // Mode badge + live toggle button
   const mode = s.trade_mode || 'PAPER';
   const modeBadge = document.getElementById('modeBadge');
   modeBadge.textContent = mode;
   modeBadge.className = 'badge ' + (mode === 'PAPER' ? 'badge-cyan' : 'badge-red');
+  const btnLive = document.getElementById('btnLiveMode');
+  if (mode === 'LIVE') {
+    btnLive.textContent = 'LIVE MODE';
+    btnLive.style.background = '#1a0a0a';
+    btnLive.style.borderColor = 'var(--red)';
+    btnLive.style.color = 'var(--red)';
+  } else {
+    btnLive.textContent = 'PAPER MODE';
+    btnLive.style.background = '#0a1a1a';
+    btnLive.style.borderColor = 'var(--cyan)';
+    btnLive.style.color = 'var(--cyan)';
+  }
 
   // Pause
   const btnPause = document.getElementById('btnPause');
@@ -713,6 +752,95 @@ function toggleSettings() {
   if (panel.classList.contains('show') && !settingsLoaded) {
     loadSettings();
   }
+  if (panel.classList.contains('show')) {
+    loadEnvStatus();
+  }
+}
+
+async function toggleLiveMode() {
+  const currentMode = document.getElementById('modeBadge').textContent;
+  const newMode = currentMode === 'LIVE' ? 'PAPER' : 'LIVE';
+
+  if (newMode === 'LIVE') {
+    const ok = confirm(
+      'Switch to LIVE trading?\n\n' +
+      'Real orders will be placed on OKX.\n' +
+      'Make sure API keys are set and balance is sufficient.'
+    );
+    if (!ok) return;
+  }
+
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({trade_mode: newMode})
+    });
+    const data = await r.json();
+    if (data.status === 'ok') {
+      showToast('Mode: ' + newMode);
+      updateAll();
+    }
+  } catch(e) {
+    showToast('Error switching mode');
+  }
+}
+
+function updatePositionCalc() {
+  const margin = parseFloat(document.getElementById('set_margin').value) || 0;
+  const lev    = parseInt(document.getElementById('set_leverage').value) || 1;
+  document.getElementById('positionCalc').textContent = '$' + (margin * lev).toFixed(0);
+}
+
+async function loadEnvStatus() {
+  try {
+    const data = await fetchJSON('/api/env');
+    const set = Object.values(data).filter(Boolean).length;
+    const total = Object.keys(data).length;
+    const el = document.getElementById('okxKeyStatus');
+    if (set === total) {
+      el.textContent = 'All keys set';
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = `${set}/${total} keys set`;
+      el.style.color = set === 0 ? 'var(--red)' : 'var(--yellow)';
+    }
+  } catch(e) {}
+}
+
+async function saveApiKeys() {
+  const payload = {};
+  const apiKey = document.getElementById('set_okx_api_key').value.trim();
+  const secret = document.getElementById('set_okx_secret').value.trim();
+  const pass   = document.getElementById('set_okx_passphrase').value.trim();
+  if (apiKey) payload['OKX_API_KEY']     = apiKey;
+  if (secret) payload['OKX_SECRET_KEY']  = secret;
+  if (pass)   payload['OKX_PASSPHRASE']  = pass;
+
+  if (!Object.keys(payload).length) {
+    showToast('Fill in at least one key');
+    return;
+  }
+  try {
+    const r = await fetch('/api/env', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await r.json();
+    if (data.status === 'ok') {
+      showToast('Keys saved to .env');
+      // Clear fields after save
+      document.getElementById('set_okx_api_key').value = '';
+      document.getElementById('set_okx_secret').value = '';
+      document.getElementById('set_okx_passphrase').value = '';
+      loadEnvStatus();
+    } else {
+      showToast('Error: ' + (data.error || 'unknown'));
+    }
+  } catch(e) {
+    showToast('Error saving keys');
+  }
 }
 
 async function loadSettings() {
@@ -744,8 +872,9 @@ async function loadSettings() {
   document.getElementById('set_sl_pct').value = trading.sl_pct || 0.3;
   document.getElementById('set_fee_pct').value = trading.fee_pct || 0.05;
   document.getElementById('set_hold_max_sec').value = trading.hold_max_sec || 5;
-  document.getElementById('set_position_size').value = trading.position_size || 10;
+  document.getElementById('set_margin').value = trading.margin || 5;
   document.getElementById('set_leverage').value = trading.leverage || 2;
+  updatePositionCalc();
   document.getElementById('set_max_positions').value = trading.max_positions || 10;
   document.getElementById('set_max_active').value = follower.max_active || 10;
   document.getElementById('set_min_wr').value = follower.min_wr || 40;
@@ -785,7 +914,7 @@ async function saveSettings() {
       sl_pct: parseFloat(document.getElementById('set_sl_pct').value),
       fee_pct: parseFloat(document.getElementById('set_fee_pct').value),
       hold_max_sec: parseInt(document.getElementById('set_hold_max_sec').value),
-      position_size: parseInt(document.getElementById('set_position_size').value),
+      margin: parseFloat(document.getElementById('set_margin').value),
       leverage: parseInt(document.getElementById('set_leverage').value),
       max_positions: parseInt(document.getElementById('set_max_positions').value)
     },
@@ -898,6 +1027,42 @@ async function addPair() {
   input.value = '';
   showToast(sym + ' added');
   updateAll();
+}
+
+async function exportPairs() {
+  const data = await fetchJSON('/api/pairs/export');
+  if (!data || !data.length) { showToast('No active pairs to export', true); return; }
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'pairs_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+  showToast('Exported ' + data.length + ' pairs');
+}
+
+async function importPairs(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const text = await file.text();
+  let data;
+  try { data = JSON.parse(text); } catch(e) { showToast('Invalid JSON', true); return; }
+  try {
+    const r = await fetch('/api/pairs/import', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const res = await r.json();
+    input.value = '';
+    if (res && res.count !== undefined) {
+      showToast('Imported ' + res.count + ' pairs' + (res.added.length ? ': ' + res.added.join(', ') : ''));
+      updateAll();
+    } else {
+      showToast(res.error || 'Import failed', true);
+    }
+  } catch(e) {
+    showToast('Import error: ' + e, true);
+  }
 }
 
 // ============ TOAST ============

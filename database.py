@@ -169,23 +169,30 @@ class Database:
             ))
             return cur.lastrowid
 
-    def get_trades(self, limit: int = 100, symbol: str = None) -> List[Dict]:
+    def get_trades(self, limit: int = 100, symbol: str = None,
+                   since: str = None) -> List[Dict]:
         with self.get_cursor() as cur:
+            where, params = [], []
             if symbol:
-                cur.execute(
-                    'SELECT * FROM trades WHERE symbol=? ORDER BY id DESC LIMIT ?',
-                    (symbol, limit))
-            else:
-                cur.execute('SELECT * FROM trades ORDER BY id DESC LIMIT ?', (limit,))
+                where.append('symbol=?'); params.append(symbol)
+            if since:
+                where.append('closed_at>=?'); params.append(since)
+            w = ('WHERE ' + ' AND '.join(where)) if where else ''
+            cur.execute(f'SELECT * FROM trades {w} ORDER BY id DESC LIMIT ?',
+                        params + [limit])
             return [dict(r) for r in cur.fetchall()]
 
-    def get_trade_stats(self, symbol: str = None, last_n: int = None) -> Dict:
+    def get_trade_stats(self, symbol: str = None, last_n: int = None,
+                        since: str = None) -> Dict:
         with self.get_cursor() as cur:
             where = []
             params = []
             if symbol:
                 where.append('symbol = ?')
                 params.append(symbol)
+            if since:
+                where.append('closed_at >= ?')
+                params.append(since)
             where_str = f"WHERE {' AND '.join(where)}" if where else ""
 
             if last_n:
@@ -306,9 +313,14 @@ class Database:
             ))
             return cur.lastrowid
 
-    def get_impulses(self, limit: int = 100) -> List[Dict]:
+    def get_impulses(self, limit: int = 100, since: str = None) -> List[Dict]:
         with self.get_cursor() as cur:
-            cur.execute('SELECT * FROM impulses ORDER BY id DESC LIMIT ?', (limit,))
+            if since:
+                cur.execute(
+                    'SELECT * FROM impulses WHERE timestamp>=? ORDER BY id DESC LIMIT ?',
+                    (since, limit))
+            else:
+                cur.execute('SELECT * FROM impulses ORDER BY id DESC LIMIT ?', (limit,))
             return [dict(r) for r in cur.fetchall()]
 
     def update_impulse_followers(self, impulse_id: int, n_followers: int):

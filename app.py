@@ -243,128 +243,64 @@ class ScannerThread(threading.Thread):
             state.health['scanner'] = 'ok (no results)'
 
 
-class BtcWsThread(threading.Thread):
+class TraderThread(threading.Thread):
     """
-    V1.1: BTC WebSocket monitor.
-    Replaces the old REST polling TraderThread.
-    Detects impulses in real-time (< 1 second from BTC move to all orders placed).
+    V1.1 (fixed): BTC 1m candle polling — same as V1.
+    Waits for candle close before entering, gives confirmed impulse.
     """
     daemon = True
 
     def __init__(self):
-        super().__init__(name='BtcWsThread')
-        self._ws: Optional[BtcWebSocket] = None
+        super().__init__(name='TraderThread')
 
     def run(self):
-        # Wait for scanner to populate pairs
-        time.sleep(15)
-        logger.info("[WS-THREAD] Starting BTC WebSocket monitor...")
+        time.sleep(15)  # Wait for scanner first run
+        logger.info("[TRADER-THREAD] Started (1m candle mode)")
 
-        self._ws = BtcWebSocket(
-            config_getter=load_config,
-            on_impulse=self._on_impulse,
-            on_price=self._on_price,
-        )
-        self._ws.start()
-
-        # Keep thread alive while running
         while state.running:
+            try:
+                if not state.trader.paused:
+                    self._check_impulse()
+            except Exception as e:
+                logger.error(f"[TRADER-THREAD] Error: {e}")
+
             time.sleep(1)
 
-        if self._ws:
-            self._ws.stop()
-
-    def _on_price(self, price: float):
-        """Update BTC price in trader state."""
-        if state.trader:
-            state.trader.btc_price = price
-
-    def _on_impulse(self, direction: str, magnitude: float, price: float, ref_price: float):
-        """Called by BtcWebSocket when impulse detected. Runs in WS thread."""
-        if not state.trader or state.trader.paused:
+    def _check_impulse(self):
+        impulse = state.trader.check_btc_impulse()
+        if not impulse:
             return
 
-        cfg = load_config()
+        impulse_id = db.save_impulse(impulse)
 
-        # Direction filter
-        trading_cfg = cfg.get('trading', {})
-        force = trading_cfg.get('force_direction')
-        if force in ('LONG', 'SHORT'):
-            direction = force
-        else:
-            if direction == 'LONG' and not trading_cfg.get('enable_long', True):
-                logger.info(f"[WS-THREAD] SKIP: LONG disabled")
-                self._save_impulse(direction, magnitude, price, ref_price, 0, 'skip_long_disabled')
-                return
-            if direction == 'SHORT' and not trading_cfg.get('enable_short', True):
-                logger.info(f"[WS-THREAD] SKIP: SHORT disabled")
-                self._save_impulse(direction, magnitude, price, ref_price, 0, 'skip_short_disabled')
-                return
+        if impulse.get('status') != 'accepted':
+            return
 
-        # Get active pairs
-        pairs = state.pair_manager.get_pairs_info() if state.pair_manager else []
+        pairs = state.pair_manager.get_pairs_info()
         if not pairs:
-            logger.info("[WS-THREAD] No active pairs, skipping impulse")
-            self._save_impulse(direction, magnitude, price, ref_price, 0, 'skip_no_pairs')
+            logger.info("[TRADER-THREAD] No active pairs, skipping impulse")
+            db.update_impulse_followers(impulse_id, 0)
             return
 
-        full_symbols = [p['full_symbol'] for p in pairs]
-        symbol_map   = {p['full_symbol']: p['symbol'] for p in pairs}
-
-        # ---------------------------------------------------------------
-        # Fetch ALL alt prices in ONE API call
-        # ---------------------------------------------------------------
-        prefetched: Dict[str, float] = {}
-        try:
-            tickers = state.exchange.fetch_tickers(full_symbols)
-            for full_sym, t in tickers.items():
-                p = t.get('last') or t.get('close') or 0
-                if p:
-                    short = symbol_map.get(full_sym, full_sym.split('/')[0])
-                    prefetched[short] = float(p)
-        except Exception as e:
-            logger.warning(f"[WS-THREAD] fetch_tickers failed ({e}), will use cached prices")
-
-        # Save impulse to DB
-        impulse_id = self._save_impulse(direction, magnitude, price, ref_price, 0, 'accepted')
-
-        # Open all positions fast
         symbols = [(p['symbol'], p['full_symbol']) for p in pairs]
-        opened = state.trader.open_positions_fast(
-            symbols, direction, impulse_id, magnitude, prefetched
-        )
+        direction = impulse['direction']
+
+        opened = state.trader.open_positions(
+            symbols, direction, impulse_id, impulse['magnitude'])
 
         db.update_impulse_followers(impulse_id, opened)
 
-        logger.info(
-            f"[WS-THREAD] Impulse {direction} {abs(magnitude)*100:.3f}% "
-            f"→ opened {opened}/{len(symbols)} positions"
-        )
-        state.health['trader'] = 'ok'
+        logger.info(f"[TRADER-THREAD] Impulse {direction} "
+                    f"{abs(impulse['magnitude'])*100:.2f}% "
+                    f"→ opened {opened}/{len(symbols)} positions")
 
         if state.telegram and opened > 0:
             state.telegram.send(
-                f"⚡ BTC {direction} {abs(magnitude)*100:.3f}%\n"
+                f"BTC {direction} {abs(impulse['magnitude'])*100:.2f}%\n"
                 f"Opened {opened} positions: "
-                f"{', '.join(s[0] for s in symbols[:opened])}"
-            )
+                f"{', '.join(s[0] for s in symbols[:opened])}")
 
-    def _save_impulse(self, direction, magnitude, price, ref_price,
-                      n_followers, status) -> int:
-        impulse = {
-            'timestamp': get_gmt2_str(),
-            'leader': 'BTC',
-            'direction': direction,
-            'magnitude': round(magnitude, 6),
-            'candle_open': round(ref_price, 2),
-            'candle_close': round(price, 2),
-            'n_followers_entered': n_followers,
-            'gap_seconds': 0,
-            'gap_factor': 1.0,
-            'quality': round(abs(magnitude), 6),
-            'status': status,
-        }
-        return db.save_impulse(impulse)
+        state.health['trader'] = 'ok'
 
 
 class PriceThread(threading.Thread):
@@ -417,6 +353,9 @@ class PriceThread(threading.Thread):
                     pass
 
         if prices:
+            # LIVE: detect positions closed by exchange SL/TP
+            state.trader.sync_exchange_positions()
+
             # Check for closes
             before = set(state.trader.positions.keys())
             state.trader.update_prices(prices)
@@ -479,13 +418,15 @@ def api_pairs_history():
 def api_trades():
     limit = request.args.get('limit', 100, type=int)
     symbol = request.args.get('symbol')
-    return jsonify(db.get_trades(limit, symbol))
+    since = db.get_state('session_start')
+    return jsonify(db.get_trades(limit, symbol, since=since))
 
 
 @app.route('/api/trades/stats')
 def api_trade_stats():
     symbol = request.args.get('symbol')
-    stats = db.get_trade_stats(symbol=symbol)
+    since = db.get_state('session_start')
+    stats = db.get_trade_stats(symbol=symbol, since=since)
     config = load_config()
     stats['max_positions'] = config.get('trading', {}).get('max_positions', 10)
     stats['max_active'] = config.get('follower', {}).get('max_active', 10)
@@ -495,7 +436,8 @@ def api_trade_stats():
 @app.route('/api/impulses')
 def api_impulses():
     limit = request.args.get('limit', 100, type=int)
-    return jsonify(db.get_impulses(limit))
+    since = db.get_state('session_start')
+    return jsonify(db.get_impulses(limit, since=since))
 
 
 @app.route('/api/positions')
@@ -556,6 +498,35 @@ def api_pair_add():
     if state.pair_manager:
         state.pair_manager.add_pair_manual(symbol)
     return jsonify({'status': 'ok', 'symbol': symbol})
+
+
+@app.route('/api/pairs/export')
+def api_pairs_export():
+    if not state.pair_manager:
+        return jsonify([])
+    pairs = state.pair_manager.get_pairs_info()
+    return jsonify([{'symbol': p['symbol'], 'full_symbol': p['full_symbol']} for p in pairs])
+
+
+@app.route('/api/pairs/import', methods=['POST'])
+def api_pairs_import():
+    data = request.get_json()
+    if not data or not isinstance(data, list):
+        return jsonify({'error': 'expected list of pairs'}), 400
+    added = []
+    for item in data:
+        if isinstance(item, str):
+            sym, full_sym = item.upper(), f"{item.upper()}/USDT:USDT"
+        elif isinstance(item, dict):
+            sym = item.get('symbol', '').upper()
+            full_sym = item.get('full_symbol', f"{sym}/USDT:USDT")
+        else:
+            continue
+        if sym and sym not in state.pair_manager.active_pairs:
+            state.pair_manager.add_pair_manual(sym, full_sym)
+            added.append(sym)
+    logger.info(f"[IMPORT] Added {len(added)} pairs: {added}")
+    return jsonify({'status': 'ok', 'added': added, 'count': len(added)})
 
 
 @app.route('/api/pair/remove', methods=['POST'])
@@ -626,6 +597,65 @@ def api_logs():
     return jsonify(db.get_logs(log_type, limit))
 
 
+@app.route('/api/env', methods=['GET'])
+def api_env_get():
+    """Return which keys are set (masked), never the actual values."""
+    keys = ['OKX_API_KEY', 'OKX_SECRET_KEY', 'OKX_PASSPHRASE']
+    return jsonify({k: bool(os.environ.get(k)) for k in keys})
+
+
+@app.route('/api/env', methods=['POST'])
+def api_env_post():
+    """Save API keys to .env file and reload into os.environ."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'no data'}), 400
+
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+
+    # Read existing .env lines, update/add our keys
+    lines = []
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            lines = f.readlines()
+
+    allowed = {'OKX_API_KEY', 'OKX_SECRET_KEY', 'OKX_PASSPHRASE'}
+    updates = {k: v for k, v in data.items() if k in allowed and v}
+
+    # Replace existing keys in-place
+    existing_keys = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or '=' not in stripped:
+            new_lines.append(line)
+            continue
+        key = stripped.split('=', 1)[0].strip()
+        if key in updates:
+            new_lines.append(f"{key}={updates[key]}\n")
+            existing_keys.add(key)
+        else:
+            new_lines.append(line)
+
+    # Append new keys not yet in file
+    for key, val in updates.items():
+        if key not in existing_keys:
+            new_lines.append(f"{key}={val}\n")
+
+    with open(env_path, 'w') as f:
+        f.writelines(new_lines)
+
+    os.chmod(env_path, 0o600)
+
+    # Reload into current process
+    for key, val in updates.items():
+        os.environ[key] = val
+
+    db.log('config', 'API keys updated', {k: '***' for k in updates})
+    logger.info(f"[ENV] Updated keys: {list(updates.keys())}")
+    return jsonify({'status': 'ok', 'updated': list(updates.keys())})
+
+
 @app.route('/api/restart', methods=['POST'])
 def api_restart():
     """Restart the bot via systemd."""
@@ -670,15 +700,21 @@ def main():
         logger.info("[TG] Telegram notifications enabled")
         state.telegram.send("Lead-Lag Trader started")
 
+    # Mark session start — UI shows only trades/impulses from this point
+    db.set_state('session_start', get_gmt2_str())
+
+    # LIVE: read real balance and sync open positions from exchange
+    state.trader.sync_live_on_start()
+
     # Start background threads
     state.running = True
 
     scanner_thread = ScannerThread()
-    ws_thread      = BtcWsThread()      # V1.1: WebSocket replaces REST polling
+    trader_thread  = TraderThread()
     price_thread   = PriceThread()
 
     scanner_thread.start()
-    ws_thread.start()
+    trader_thread.start()
     price_thread.start()
 
     logger.info("[APP] Background threads started")

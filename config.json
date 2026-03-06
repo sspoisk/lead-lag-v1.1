@@ -8,7 +8,7 @@
       "BTC"
     ],
     "impulse_threshold": 0.0018,
-    "ws_window_sec": 30,
+    "timeframe": "1m",
     "cooldown_seconds": 60,
     "quality": {
       "enabled": true,
@@ -36,7 +36,7 @@
     "sl_pct": 0.3,
     "hold_max_sec": 3,
     "fee_pct": 0.05,
-    "position_size": 10,
+    "margin": 5,
     "leverage": 2,
     "max_positions": 15,
     "initial_balance": 1000.0
