@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="ru" translate="no">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="google" content="notranslate">
+<title>Lead-Lag Trader V1.1</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Orbitron:wght@500;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0e17;
+  --bg2: #111827;
+  --bg3: #1a1f2e;
+  --bg4: #0d1117;
+  --text: #e2e8f0;
+  --text2: #94a3b8;
+  --text3: #64748b;
+  --green: #00ff88;
+  --cyan: #00d4ff;
+  --red: #ef4444;
+  --orange: #f59e0b;
+  --purple: #a855f7;
+  --blue: #3b82f6;
+  --border: #2d3748;
+}
+body { font-family: 'JetBrains Mono', monospace; background: var(--bg); color: var(--text); min-height: 100vh; }
+.container { max-width: 1600px; margin: 0 auto; padding: 12px; }
+
+/* HEADER */
+.header { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: var(--bg2); border-bottom: 1px solid var(--border); gap: 10px; min-height: 56px; flex-wrap: wrap; }
+.logo { font-family: 'Orbitron', sans-serif; font-size: 1.3rem; font-weight: 700; background: linear-gradient(90deg, var(--cyan), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.logo-sub { font-size: 0.6rem; color: var(--text3); -webkit-text-fill-color: var(--text3); }
+.header-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.header-time { font-size: 0.72rem; color: var(--cyan); padding: 4px 10px; background: var(--bg4); border-radius: 4px; }
+
+/* BADGES */
+.badge { padding: 4px 10px; border-radius: 14px; font-size: 0.68rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+.badge-green { background: rgba(0,255,136,0.12); color: var(--green); border: 1px solid rgba(0,255,136,0.25); }
+.badge-red { background: rgba(239,68,68,0.12); color: var(--red); border: 1px solid rgba(239,68,68,0.25); }
+.badge-cyan { background: rgba(0,212,255,0.12); color: var(--cyan); border: 1px solid rgba(0,212,255,0.25); }
+.badge-orange { background: rgba(245,158,11,0.12); color: var(--orange); border: 1px solid rgba(245,158,11,0.25); }
+.badge-purple { background: rgba(168,85,247,0.12); color: var(--purple); border: 1px solid rgba(168,85,247,0.25); }
+
+/* BUTTONS */
+.btn { padding: 5px 12px; border: none; border-radius: 4px; font-family: inherit; font-size: 0.72rem; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+.btn-primary { background: linear-gradient(135deg, var(--cyan), var(--purple)); color: var(--bg); }
+.btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+.btn-danger { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid var(--red); }
+.btn-warn { background: rgba(245,158,11,0.15); color: var(--orange); border: 1px solid var(--orange); }
+.btn:hover { opacity: 0.8; transform: translateY(-1px); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* STATS */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin: 12px 0; }
+.stat { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+.stat-label { font-size: 0.6rem; color: var(--text3); text-transform: uppercase; margin-bottom: 4px; }
+.stat-value { font-family: 'Orbitron', sans-serif; font-size: 1.05rem; font-weight: 700; }
+.stat-sub { font-size: 0.62rem; color: var(--text3); margin-top: 2px; }
+.stat-value.pos { color: var(--green); }
+.stat-value.neg { color: var(--red); }
+
+/* GRID */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+@media (max-width: 1100px) { .grid-3 { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* CARDS */
+.card { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.card-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg2); border-bottom: 1px solid var(--border); }
+.card-title { font-family: 'Orbitron', sans-serif; font-size: 0.75rem; font-weight: 700; color: var(--cyan); }
+.card-body { padding: 10px; max-height: 380px; overflow-y: auto; }
+
+/* TABLE */
+table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+th { text-align: left; padding: 6px 8px; color: var(--text3); font-weight: 600; border-bottom: 1px solid var(--border); font-size: 0.65rem; text-transform: uppercase; }
+td { padding: 6px 8px; border-bottom: 1px solid rgba(45,55,72,0.5); }
+tr:hover { background: rgba(0,212,255,0.03); }
+
+/* IMPULSE LOG */
+.impulse-item { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(45,55,72,0.4); font-size: 0.72rem; }
+.impulse-arrow { font-size: 1rem; }
+.impulse-arrow.up { color: var(--green); }
+.impulse-arrow.down { color: var(--red); }
+.impulse-mag { font-weight: 600; min-width: 52px; }
+.impulse-time { color: var(--text3); font-size: 0.65rem; }
+.impulse-followers { color: var(--text2); font-size: 0.65rem; }
+.impulse-quality { font-size: 0.6rem; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+.impulse-quality.strong { background: rgba(0,255,136,0.15); color: var(--green); }
+.impulse-quality.medium { background: rgba(245,158,11,0.15); color: var(--orange); }
+.impulse-quality.weak { background: rgba(239,68,68,0.12); color: var(--text3); }
+
+/* PAIR ROW */
+.pair-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(45,55,72,0.4); }
+.pair-sym { font-weight: 600; font-size: 0.78rem; color: var(--text); min-width: 70px; }
+.pair-stats { display: flex; gap: 10px; font-size: 0.68rem; color: var(--text2); align-items: center; }
+.pair-stat-val { font-weight: 600; }
+
+/* POSITION ROW */
+.pos-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(45,55,72,0.4); }
+.pos-sym { font-weight: 600; font-size: 0.78rem; min-width: 70px; }
+.pos-side { font-weight: 600; font-size: 0.68rem; padding: 2px 6px; border-radius: 3px; }
+.pos-side.long { color: var(--green); background: rgba(0,255,136,0.1); }
+.pos-side.short { color: var(--red); background: rgba(239,68,68,0.1); }
+.pos-pnl { font-weight: 700; font-size: 0.78rem; min-width: 60px; text-align: right; }
+
+/* SCANNER STATUS */
+.scanner-bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; font-size: 0.7rem; color: var(--text2); margin-top: 12px; }
+
+/* SETTINGS PANEL */
+.settings-panel { display: none; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin: 12px 0; }
+.settings-panel.show { display: block; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.settings-group { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+.settings-group-title { font-family: 'Orbitron', sans-serif; font-size: 0.7rem; color: var(--cyan); margin-bottom: 10px; }
+.setting-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.setting-label { font-size: 0.7rem; color: var(--text2); }
+.setting-input { background: var(--bg4); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 4px; font-family: inherit; font-size: 0.72rem; width: 80px; text-align: right; }
+.setting-input:focus { outline: none; border-color: var(--cyan); }
+
+/* EMPTY */
+.empty { text-align: center; color: var(--text3); padding: 24px; font-size: 0.75rem; }
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg4); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* PULSE */
+@keyframes pulse { 50% { opacity: 0.5; } }
+.pulse { animation: pulse 2s infinite; }
+
+/* HEALTH DOT */
+.health-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.health-dot.ok { background: var(--green); }
+.health-dot.error { background: var(--red); }
+.health-dot.unknown { background: var(--orange); }
+
+/* TOAST */
+.toast { position: fixed; top: 20px; right: 20px; background: var(--bg2); border: 1px solid var(--green); color: var(--green); padding: 10px 16px; border-radius: 6px; font-size: 0.75rem; z-index: 9999; opacity: 0; transition: opacity 0.3s; }
+.toast.show { opacity: 1; }
+.toast.error { border-color: var(--red); color: var(--red); }
+</style>
+</head>
+<body>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<!-- HEADER -->
+<div class="header">
+  <div>
+    <span class="logo">LEAD-LAG TRADER V1.1<br><span class="logo-sub">BTC Impulse → Alt Follow</span></span>
+  </div>
+  <div class="header-controls">
+    <span class="header-time" id="clock">--:--:--</span>
+    <span class="badge badge-cyan" id="modeBadge">PAPER</span>
+    <span class="badge" id="healthBadge">
+      <span class="health-dot unknown" id="healthDot"></span> INIT
+    </span>
+    <button class="btn btn-secondary" id="btnPause" onclick="togglePause()">PAUSE</button>
+    <button class="btn btn-secondary" onclick="toggleSettings()">SETTINGS</button>
+    <button class="btn btn-danger" onclick="closeAll()">CLOSE ALL</button>
+    <button class="btn btn-warn" onclick="resetStats()">RESET</button>
+    <button class="btn btn-secondary" onclick="restartBot()">RESTART</button>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- STATS -->
+<div class="stats">
+  <div class="stat">
+    <div class="stat-label">Balance</div>
+    <div class="stat-value" id="statBalance">$0.00</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">PnL</div>
+    <div class="stat-value" id="statPnlUsd">$0.00</div>
+    <div class="stat-sub" id="statPnlPct">0.00%</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Trades</div>
+    <div class="stat-value" id="statTrades">0</div>
+    <div class="stat-sub" id="statWL">0W / 0L</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Win Rate</div>
+    <div class="stat-value" id="statWR">0%</div>
+    <div class="stat-sub" id="statPF">PF: --</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Open Pos</div>
+    <div class="stat-value" id="statOpen">0</div>
+    <div class="stat-sub" id="statMaxPos">/10 max</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Active Pairs</div>
+    <div class="stat-value" id="statPairs">0</div>
+    <div class="stat-sub" id="statMaxPairs">/10 max</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">BTC Price</div>
+    <div class="stat-value" id="statBTC">$0</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Impulse Thr.</div>
+    <div class="stat-value" id="statThreshold">0.15%</div>
+    <div class="stat-sub" id="statImpulses">0 impulses</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Avg Hold</div>
+    <div class="stat-value" id="statAvgHold">--</div>
+    <div class="stat-sub" id="statExitBreakdown">TP:0 SL:0 T:0</div>
+  </div>
+</div>
+
+<!-- SETTINGS PANEL (hidden by default) -->
+<div class="settings-panel" id="settingsPanel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <span style="font-family:'Orbitron',sans-serif;font-size:0.85rem;color:var(--cyan);">SETTINGS</span>
+    <div style="display:flex;gap:6px;">
+      <button class="btn btn-primary" onclick="saveSettings()">SAVE</button>
+      <button class="btn btn-secondary" onclick="toggleSettings()">CLOSE</button>
+    </div>
+  </div>
+  <div class="settings-grid">
+    <div class="settings-group">
+      <div class="settings-group-title">ЛИДЕР (BTC)</div>
+      <div class="setting-row">
+        <span class="setting-label">Порог импульса %</span>
+        <input class="setting-input" id="set_impulse_threshold" type="number" step="0.01" value="0.15">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Кулдаун сек</span>
+        <input class="setting-input" id="set_cooldown_seconds" type="number" step="1" value="60">
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-group-title">КАЧЕСТВО ИМПУЛЬСА</div>
+      <div class="setting-row">
+        <span class="setting-label">Включить оценку</span>
+        <input type="checkbox" id="set_quality_enabled" style="width:18px;height:18px;accent-color:var(--cyan);">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Мин. качество %</span>
+        <input class="setting-input" id="set_min_quality" type="number" step="0.001" value="0.03">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Слабая пауза сек</span>
+        <input class="setting-input" id="set_gap_weak_sec" type="number" step="10" value="120">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Сильная пауза сек</span>
+        <input class="setting-input" id="set_gap_strong_sec" type="number" step="60" value="900">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Мин. множитель</span>
+        <input class="setting-input" id="set_gap_min_factor" type="number" step="0.1" value="0.5">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Макс. множитель</span>
+        <input class="setting-input" id="set_gap_max_factor" type="number" step="0.1" value="2.0">
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-group-title">TRADING</div>
+      <div class="setting-row">
+        <span class="setting-label">Вкл LONG</span>
+        <input type="checkbox" id="set_enable_long" checked>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Вкл SHORT</span>
+        <input type="checkbox" id="set_enable_short" checked>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Лонг на любой сигнал</span>
+        <input type="checkbox" id="set_force_long" onchange="if(this.checked) document.getElementById('set_force_short').checked=false">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Шорт на любой сигнал</span>
+        <input type="checkbox" id="set_force_short" onchange="if(this.checked) document.getElementById('set_force_long').checked=false">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">TP %</span>
+        <input class="setting-input" id="set_tp_pct" type="number" step="0.1" value="0.5">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">SL %</span>
+        <input class="setting-input" id="set_sl_pct" type="number" step="0.1" value="0.3">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Fee %</span>
+        <input class="setting-input" id="set_fee_pct" type="number" step="0.01" value="0.05">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Hold max sec</span>
+        <input class="setting-input" id="set_hold_max_sec" type="number" step="1" value="30">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Position $ size</span>
+        <input class="setting-input" id="set_position_size" type="number" step="1" value="10">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Leverage</span>
+        <input class="setting-input" id="set_leverage" type="number" step="1" value="2">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Max positions</span>
+        <input class="setting-input" id="set_max_positions" type="number" step="1" value="10">
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-group-title">FOLLOWER</div>
+      <div class="setting-row">
+        <span class="setting-label">Max active pairs</span>
+        <input class="setting-input" id="set_max_active" type="number" step="1" value="10">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Min WR %</span>
+        <input class="setting-input" id="set_min_wr" type="number" step="1" value="40">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Min PF</span>
+        <input class="setting-input" id="set_min_pf" type="number" step="0.1" value="0.7">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Degrade WR %</span>
+        <input class="setting-input" id="set_degrade_wr" type="number" step="1" value="45">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Degrade PF</span>
+        <input class="setting-input" id="set_degrade_pf" type="number" step="0.1" value="0.9">
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-group-title">SCANNER</div>
+      <div class="setting-row">
+        <span class="setting-label">Interval min</span>
+        <input class="setting-input" id="set_scan_interval" type="number" step="5" value="30">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Lookback hrs</span>
+        <input class="setting-input" id="set_lookback_hours" type="number" step="1" value="12">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Top pairs</span>
+        <input class="setting-input" id="set_top_pairs" type="number" step="10" value="50">
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">Min vol $</span>
+        <input class="setting-input" id="set_min_volume" type="number" step="100000" value="500000">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN GRID -->
+<div class="grid-2">
+  <!-- LEFT: ACTIVE PAIRS -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">ACTIVE PAIRS</span>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="addPairInput" placeholder="SYM" style="background:var(--bg4);border:1px solid var(--border);color:var(--text);padding:3px 6px;border-radius:4px;font-family:inherit;font-size:0.68rem;width:60px;" onkeydown="if(event.key==='Enter')addPair()">
+        <button class="btn btn-secondary" style="padding:3px 8px" onclick="addPair()">+ADD</button>
+        <button class="btn btn-secondary" onclick="runScan()" id="btnScan">SCAN NOW</button>
+      </div>
+    </div>
+    <div class="card-body" id="pairsBody">
+      <div class="empty">Waiting for scanner...</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: OPEN POSITIONS -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">OPEN POSITIONS</span>
+      <span class="badge badge-cyan" id="posCount">0</span>
+    </div>
+    <div class="card-body" id="positionsBody">
+      <div class="empty">No open positions</div>
+    </div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <!-- LEFT: IMPULSE LOG -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">BTC IMPULSE LOG</span>
+      <span class="badge badge-purple" id="impulseCount">0</span>
+    </div>
+    <div class="card-body" id="impulsesBody">
+      <div class="empty">No impulses detected yet</div>
+    </div>
+  </div>
+
+  <!-- RIGHT: TRADE HISTORY -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">TRADE HISTORY</span>
+      <span class="badge badge-cyan" id="tradeCount">0</span>
+    </div>
+    <div class="card-body" id="tradesBody">
+      <div class="empty">No trades yet</div>
+    </div>
+  </div>
+</div>
+
+<!-- SCANNER STATUS BAR -->
+<div class="scanner-bar">
+  <span id="scannerStatus">SCANNER: initializing...</span>
+  <span id="scannerNext">next scan: --:--</span>
+</div>
+
+</div><!-- container -->
+
+<script>
+// ============ DATA FETCHING ============
+
+let refreshInterval = null;
+let lastTradeStats = null;
+
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(e) {
+    console.error('Fetch error:', url, e);
+    return null;
+  }
+}
+
+async function updateAll() {
+  const [status, pairs, positions, impulses, trades, tradeStats] = await Promise.all([
+    fetchJSON('/api/status'),
+    fetchJSON('/api/pairs'),
+    fetchJSON('/api/positions'),
+    fetchJSON('/api/impulses?limit=30'),
+    fetchJSON('/api/trades?limit=50'),
+    fetchJSON('/api/trades/stats')
+  ]);
+
+  if (status) renderStatus(status);
+  if (pairs) renderPairs(pairs);
+  if (positions) renderPositions(positions);
+  if (impulses) renderImpulses(impulses);
+  if (trades) renderTrades(trades);
+  if (tradeStats) lastTradeStats = tradeStats;
+  if (tradeStats) renderTradeStats(tradeStats);
+}
+
+// ============ RENDER FUNCTIONS ============
+
+function renderStatus(s) {
+  const bal = s.balance || 0;
+  document.getElementById('statBalance').textContent = '$' + bal.toFixed(2);
+
+  // PnL in $ and %
+  const pnlUsd = s.pnl_usd || 0;
+  const pnlPct = s.pnl_pct || 0;
+  const pnlUsdEl = document.getElementById('statPnlUsd');
+  pnlUsdEl.textContent = (pnlUsd >= 0 ? '+' : '') + pnlUsd.toFixed(2) + '$';
+  pnlUsdEl.className = 'stat-value ' + (pnlUsd >= 0 ? 'pos' : 'neg');
+  document.getElementById('statPnlPct').textContent = (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%';
+
+  const total = s.total_trades || 0;
+  const wins = s.wins || 0;
+  const losses = s.losses || 0;
+  document.getElementById('statTrades').textContent = total;
+  document.getElementById('statWL').textContent = wins + 'W / ' + losses + 'L';
+
+  const wr = s.win_rate || 0;
+  const wrEl = document.getElementById('statWR');
+  wrEl.textContent = wr.toFixed(1) + '%';
+  wrEl.className = 'stat-value ' + (wr >= 50 ? 'pos' : wr > 0 ? 'neg' : '');
+
+  document.getElementById('statOpen').textContent = s.open_positions || 0;
+  document.getElementById('statPairs').textContent = s.active_pairs || 0;
+
+  const btc = s.btc_price || 0;
+  document.getElementById('statBTC').textContent = '$' + btc.toLocaleString('en', {maximumFractionDigits: 0});
+
+  // Mode
+  const mode = s.trade_mode || 'PAPER';
+  const modeBadge = document.getElementById('modeBadge');
+  modeBadge.textContent = mode;
+  modeBadge.className = 'badge ' + (mode === 'PAPER' ? 'badge-cyan' : 'badge-red');
+
+  // Pause
+  const btnPause = document.getElementById('btnPause');
+  if (s.paused) {
+    btnPause.textContent = 'RESUME';
+    btnPause.className = 'btn btn-primary';
+  } else {
+    btnPause.textContent = 'PAUSE';
+    btnPause.className = 'btn btn-secondary';
+  }
+
+  // Health
+  const health = s.health || {};
+  const allOk = Object.values(health).every(v => v === 'ok');
+  const hBadge = document.getElementById('healthBadge');
+  if (allOk) {
+    hBadge.className = 'badge badge-green';
+    hBadge.innerHTML = '<span class="health-dot ok"></span> OK';
+  } else {
+    hBadge.className = 'badge badge-orange';
+    hBadge.innerHTML = '<span class="health-dot error"></span> WARN';
+  }
+
+  // Scanner
+  const scanEl = document.getElementById('scannerStatus');
+  if (s.scan_running) {
+    scanEl.textContent = 'SCANNER: running...';
+  } else if (s.last_scan) {
+    scanEl.textContent = 'SCANNER: last run ' + s.last_scan;
+  }
+  document.getElementById('scannerNext').textContent = 'next: ' + (s.next_scan || '--:--');
+
+  // Impulse threshold from status
+  document.getElementById('statImpulses').textContent = (s.total_impulses || 0) + ' impulses';
+}
+
+function renderTradeStats(ts) {
+  // PF
+  const pf = ts.pf || 0;
+  const pfEl = document.getElementById('statPF');
+  pfEl.textContent = 'PF: ' + (pf > 0 ? pf.toFixed(2) : '--');
+
+  // Avg hold
+  const avgHold = ts.avg_hold_sec || 0;
+  const holdEl = document.getElementById('statAvgHold');
+  holdEl.textContent = avgHold < 60 ? avgHold.toFixed(0) + 's' : (avgHold / 60).toFixed(1) + 'm';
+
+  // Exit breakdown
+  const tp = ts.tp_count || 0;
+  const sl = ts.sl_count || 0;
+  const time = ts.time_count || 0;
+  document.getElementById('statExitBreakdown').textContent = 'TP:' + tp + ' SL:' + sl + ' T:' + time;
+
+  // Max positions from config
+  document.getElementById('statMaxPos').textContent = '/' + (ts.max_positions || 10) + ' max';
+  document.getElementById('statMaxPairs').textContent = '/' + (ts.max_active || 10) + ' max';
+}
+
+function renderPairs(pairs) {
+  const el = document.getElementById('pairsBody');
+  if (!pairs || pairs.length === 0) {
+    el.innerHTML = '<div class="empty">No active pairs — waiting for scanner</div>';
+    return;
+  }
+  let html = '';
+  for (const p of pairs) {
+    const wr = p.scanner_wr || 0;
+    const pf = p.scanner_pf || 0;
+    const liveWr = p.live_wr || 0;
+    const liveTrades = p.live_trades || 0;
+    const livePnl = p.live_pnl || 0;
+    const wrColor = wr >= 60 ? 'var(--green)' : wr >= 50 ? 'var(--orange)' : 'var(--red)';
+    const livePnlColor = livePnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+    html += `<div class="pair-row">
+      <span class="pair-sym">${p.symbol}</span>
+      <div class="pair-stats">
+        <span>WR:<span class="pair-stat-val" style="color:${wrColor}">${wr.toFixed(0)}%</span></span>
+        <span>PF:<span class="pair-stat-val">${pf.toFixed(1)}</span></span>
+        <span style="color:${livePnlColor}">live:${liveTrades}t ${livePnl >= 0 ? '+' : ''}${livePnl.toFixed(2)}$</span>
+        <button class="btn btn-danger" style="padding:2px 6px;font-size:0.6rem" onclick="removePair('${p.symbol}')">x</button>
+      </div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderPositions(positions) {
+  const el = document.getElementById('positionsBody');
+  document.getElementById('posCount').textContent = positions ? positions.length : 0;
+
+  if (!positions || positions.length === 0) {
+    el.innerHTML = '<div class="empty">No open positions</div>';
+    return;
+  }
+  let html = '';
+  for (const p of positions) {
+    const pnl = p.pnl_percent || 0;
+    const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const sideClass = p.side === 'LONG' ? 'long' : 'short';
+
+    let holdStr = '';
+    if (p.opened_at) {
+      const opened = new Date(p.opened_at.replace(' ', 'T') + 'Z');
+      const now = new Date();
+      const sec = Math.floor((now - opened) / 1000);
+      holdStr = sec < 60 ? sec + 's' : Math.floor(sec/60) + 'm' + (sec%60) + 's';
+    }
+
+    const impulse = p.impulse_magnitude ? (Math.abs(p.impulse_magnitude)*100).toFixed(2) + '%' : '';
+
+    html += `<div class="pos-row">
+      <span class="pos-sym">${p.short_symbol || p.symbol}</span>
+      <span class="pos-side ${sideClass}">${p.side}</span>
+      <span style="font-size:0.65rem;color:var(--purple)">${impulse}</span>
+      <span style="font-size:0.68rem;color:var(--text2)">${holdStr}</span>
+      <span class="pos-pnl" style="color:${pnlColor}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderImpulses(impulses) {
+  const el = document.getElementById('impulsesBody');
+  document.getElementById('impulseCount').textContent = impulses ? impulses.length : 0;
+
+  if (!impulses || impulses.length === 0) {
+    el.innerHTML = '<div class="empty">No impulses detected yet</div>';
+    return;
+  }
+  let html = '';
+  for (const imp of impulses.slice(0, 30)) {
+    const isUp = imp.direction === 'LONG';
+    const arrow = isUp ? '▲' : '▼';
+    const arrowClass = isUp ? 'up' : 'down';
+    const mag = Math.abs(imp.magnitude || 0) * 100;
+    const magStr = mag.toFixed(2);
+    const time = (imp.timestamp || '').slice(11, 19);
+    const followers = imp.n_followers_entered || 0;
+    const gapSec = imp.gap_seconds || 0;
+    const gapFactor = imp.gap_factor || 1.0;
+    const qualityVal = (imp.quality || 0) * 100;
+    const status = imp.status || 'accepted';
+    const isSkipped = status !== 'accepted';
+
+    // Skip reason label
+    let skipLabel = '';
+    if (status === 'skip_long_disabled') skipLabel = 'LONG выкл';
+    else if (status === 'skip_short_disabled') skipLabel = 'SHORT выкл';
+    else if (status === 'skip_quality') skipLabel = 'Q-фильтр';
+
+    // Quality label based on quality score (magnitude × gap_factor)
+    let quality, qClass;
+    if (qualityVal >= 0.04) { quality = 'STRONG'; qClass = 'strong'; }
+    else if (qualityVal >= 0.02) { quality = 'OK'; qClass = 'medium'; }
+    else if (qualityVal > 0) { quality = 'WEAK'; qClass = 'weak'; }
+    else { quality = mag >= 0.20 ? 'STRONG' : mag >= 0.15 ? 'OK' : 'WEAK'; qClass = mag >= 0.20 ? 'strong' : mag >= 0.15 ? 'medium' : 'weak'; }
+
+    // Gap display
+    let gapStr = '';
+    if (gapSec > 0) {
+      gapStr = gapSec < 60 ? Math.round(gapSec) + 'с' : Math.round(gapSec / 60) + 'м';
+      gapStr = ' пауза:' + gapStr + ' x' + gapFactor.toFixed(1);
+    }
+
+    const rowStyle = isSkipped ? 'opacity:0.45;' : '';
+    const followerCell = isSkipped
+      ? `<span style="font-size:0.58rem;color:var(--text2)">[${skipLabel}]</span>`
+      : `<span class="impulse-followers">${followers > 0 ? '→ ' + followers + ' поз' : 'пропуск'}</span>`;
+
+    html += `<div class="impulse-item" style="${rowStyle}">
+      <span class="impulse-arrow ${arrowClass}">${arrow}</span>
+      <span class="impulse-mag" style="color:${isUp ? 'var(--green)' : 'var(--red)'}">${isUp ? '+' : '-'}${magStr}%</span>
+      <span class="impulse-quality ${qClass}">${quality}</span>
+      <span style="font-size:0.58rem;color:var(--purple)" title="quality=${qualityVal.toFixed(3)}%">${qualityVal > 0 ? 'Q:' + qualityVal.toFixed(3) + '%' : ''}${gapStr}</span>
+      <span class="impulse-time">${time}</span>
+      ${followerCell}
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function renderTrades(trades) {
+  const el = document.getElementById('tradesBody');
+  document.getElementById('tradeCount').textContent = trades ? trades.length : 0;
+
+  if (!trades || trades.length === 0) {
+    el.innerHTML = '<div class="empty">No trades yet</div>';
+    return;
+  }
+  let html = '<table><tr><th>ID</th><th>Symbol</th><th>Side</th><th>PnL</th><th>Reason</th><th>Hold</th><th>Impulse</th></tr>';
+  for (const t of trades.slice(0, 50)) {
+    const pnl = t.pnl_pct || 0;
+    const pnlUsd = t.pnl_usdt || 0;
+    const pnlColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const icon = pnl > 0 ? '+' : '';
+    const hold = t.hold_seconds || 0;
+    const holdStr = hold < 60 ? hold + 's' : Math.floor(hold/60) + 'm';
+    const impMag = t.impulse_magnitude ? (Math.abs(t.impulse_magnitude)*100).toFixed(2) + '%' : '';
+
+    html += `<tr>
+      <td style="color:var(--text3)">${t.trade_id || ''}</td>
+      <td style="font-weight:600">${t.symbol || ''}</td>
+      <td><span class="pos-side ${(t.side||'').toLowerCase()}">${t.side || ''}</span></td>
+      <td style="color:${pnlColor};font-weight:600">${icon}${pnl.toFixed(2)}% <span style="font-size:0.62rem;opacity:0.7">${icon}${pnlUsd.toFixed(3)}$</span></td>
+      <td style="color:var(--text2)">${t.close_reason || ''}</td>
+      <td style="color:var(--text3)">${holdStr}</td>
+      <td style="color:var(--purple);font-size:0.65rem">${impMag}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  el.innerHTML = html;
+}
+
+// ============ SETTINGS ============
+
+let settingsLoaded = false;
+
+function toggleSettings() {
+  const panel = document.getElementById('settingsPanel');
+  panel.classList.toggle('show');
+  if (panel.classList.contains('show') && !settingsLoaded) {
+    loadSettings();
+  }
+}
+
+async function loadSettings() {
+  const config = await fetchJSON('/api/settings');
+  if (!config) return;
+
+  const leader = config.leader || {};
+  const trading = config.trading || {};
+  const follower = config.follower || {};
+  const scanner = config.scanner || {};
+
+  document.getElementById('set_impulse_threshold').value = (leader.impulse_threshold || 0.0015) * 100;
+  document.getElementById('set_cooldown_seconds').value = leader.cooldown_seconds || 60;
+
+  // Quality settings
+  const quality = leader.quality || {};
+  document.getElementById('set_quality_enabled').checked = quality.enabled !== false;
+  document.getElementById('set_min_quality').value = (quality.min_quality || 0.001) * 100;
+  document.getElementById('set_gap_weak_sec').value = quality.gap_weak_sec || 120;
+  document.getElementById('set_gap_strong_sec').value = quality.gap_strong_sec || 900;
+  document.getElementById('set_gap_min_factor').value = quality.gap_min_factor || 0.5;
+  document.getElementById('set_gap_max_factor').value = quality.gap_max_factor || 2.0;
+
+  document.getElementById('set_enable_long').checked = trading.enable_long !== false;
+  document.getElementById('set_enable_short').checked = trading.enable_short !== false;
+  document.getElementById('set_force_long').checked = trading.force_direction === 'LONG';
+  document.getElementById('set_force_short').checked = trading.force_direction === 'SHORT';
+  document.getElementById('set_tp_pct').value = trading.tp_pct || 0.5;
+  document.getElementById('set_sl_pct').value = trading.sl_pct || 0.3;
+  document.getElementById('set_fee_pct').value = trading.fee_pct || 0.05;
+  document.getElementById('set_hold_max_sec').value = trading.hold_max_sec || 5;
+  document.getElementById('set_position_size').value = trading.position_size || 10;
+  document.getElementById('set_leverage').value = trading.leverage || 2;
+  document.getElementById('set_max_positions').value = trading.max_positions || 10;
+  document.getElementById('set_max_active').value = follower.max_active || 10;
+  document.getElementById('set_min_wr').value = follower.min_wr || 40;
+  document.getElementById('set_min_pf').value = follower.min_pf || 0.7;
+  document.getElementById('set_degrade_wr').value = follower.degrade_wr || 45;
+  document.getElementById('set_degrade_pf').value = follower.degrade_pf || 0.9;
+  document.getElementById('set_scan_interval').value = scanner.interval_min || 30;
+  document.getElementById('set_lookback_hours').value = scanner.lookback_hours || 12;
+  document.getElementById('set_top_pairs').value = scanner.top_pairs || 50;
+  document.getElementById('set_min_volume').value = scanner.min_volume_usd || 500000;
+
+  // Update threshold stat
+  document.getElementById('statThreshold').textContent = ((leader.impulse_threshold || 0.0015) * 100).toFixed(2) + '%';
+
+  settingsLoaded = true;
+}
+
+async function saveSettings() {
+  const data = {
+    leader: {
+      impulse_threshold: parseFloat(document.getElementById('set_impulse_threshold').value) / 100,
+      cooldown_seconds: parseInt(document.getElementById('set_cooldown_seconds').value),
+      quality: {
+        enabled: document.getElementById('set_quality_enabled').checked,
+        min_quality: parseFloat(document.getElementById('set_min_quality').value) / 100,
+        gap_weak_sec: parseInt(document.getElementById('set_gap_weak_sec').value),
+        gap_strong_sec: parseInt(document.getElementById('set_gap_strong_sec').value),
+        gap_min_factor: parseFloat(document.getElementById('set_gap_min_factor').value),
+        gap_max_factor: parseFloat(document.getElementById('set_gap_max_factor').value)
+      }
+    },
+    trading: {
+      enable_long: document.getElementById('set_enable_long').checked,
+      enable_short: document.getElementById('set_enable_short').checked,
+      force_direction: document.getElementById('set_force_long').checked ? 'LONG' : document.getElementById('set_force_short').checked ? 'SHORT' : null,
+      tp_pct: parseFloat(document.getElementById('set_tp_pct').value),
+      sl_pct: parseFloat(document.getElementById('set_sl_pct').value),
+      fee_pct: parseFloat(document.getElementById('set_fee_pct').value),
+      hold_max_sec: parseInt(document.getElementById('set_hold_max_sec').value),
+      position_size: parseInt(document.getElementById('set_position_size').value),
+      leverage: parseInt(document.getElementById('set_leverage').value),
+      max_positions: parseInt(document.getElementById('set_max_positions').value)
+    },
+    follower: {
+      max_active: parseInt(document.getElementById('set_max_active').value),
+      min_wr: parseInt(document.getElementById('set_min_wr').value),
+      min_pf: parseFloat(document.getElementById('set_min_pf').value),
+      degrade_wr: parseInt(document.getElementById('set_degrade_wr').value),
+      degrade_pf: parseFloat(document.getElementById('set_degrade_pf').value)
+    },
+    scanner: {
+      interval_min: parseInt(document.getElementById('set_scan_interval').value),
+      lookback_hours: parseInt(document.getElementById('set_lookback_hours').value),
+      top_pairs: parseInt(document.getElementById('set_top_pairs').value),
+      min_volume_usd: parseInt(document.getElementById('set_min_volume').value)
+    }
+  };
+
+  const r = await fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  });
+
+  if (r.ok) {
+    showToast('Settings saved');
+    document.getElementById('statThreshold').textContent = document.getElementById('set_impulse_threshold').value + '%';
+  } else {
+    showToast('Save failed!', true);
+  }
+}
+
+// ============ ACTIONS ============
+
+async function togglePause() {
+  await fetch('/api/pause', {method: 'POST'});
+  updateAll();
+}
+
+async function closeAll() {
+  if (!confirm('Close all positions?')) return;
+  await fetch('/api/close_all', {method: 'POST'});
+  showToast('Closed all positions');
+  updateAll();
+}
+
+async function resetStats() {
+  console.log('[UI] resetStats clicked');
+  if (!confirm('Reset balance and PnL stats?')) return;
+  console.log('[UI] reset confirmed');
+  try {
+    const r = await fetch('/api/reset', {method: 'POST'});
+    console.log('[UI] reset response:', r.status);
+    const d = await r.json();
+    console.log('[UI] reset data:', d);
+    if (d.status === 'ok') {
+      showToast('Stats reset OK');
+      updateAll();
+    } else {
+      showToast('Reset failed: ' + (d.error || JSON.stringify(d)), true);
+    }
+  } catch(e) {
+    console.error('[UI] reset error:', e);
+    showToast('Reset error: ' + e.message, true);
+  }
+}
+
+async function restartBot() {
+  console.log('[UI] restartBot clicked');
+  if (!confirm('Restart the bot? Open positions will persist.')) return;
+  console.log('[UI] restart confirmed');
+  try {
+    const r = await fetch('/api/restart', {method: 'POST'});
+    console.log('[UI] restart response:', r.status);
+    showToast('Restarting... page will reload in 3s');
+    setTimeout(function(){ location.reload(); }, 3000);
+  } catch(e) {
+    console.error('[UI] restart error:', e);
+    showToast('Restart error: ' + e.message, true);
+  }
+}
+
+async function runScan() {
+  document.getElementById('btnScan').textContent = 'SCANNING...';
+  document.getElementById('btnScan').disabled = true;
+  await fetch('/api/scan/run', {method: 'POST'});
+  document.getElementById('btnScan').textContent = 'SCAN NOW';
+  document.getElementById('btnScan').disabled = false;
+}
+
+async function removePair(symbol) {
+  await fetch('/api/pair/remove', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({symbol: symbol, reason: 'manual'})
+  });
+  showToast(symbol + ' removed');
+  updateAll();
+}
+
+async function addPair() {
+  const input = document.getElementById('addPairInput');
+  const sym = input.value.trim().toUpperCase();
+  if (!sym) return;
+  await fetch('/api/pair/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({symbol: sym})
+  });
+  input.value = '';
+  showToast(sym + ' added');
+  updateAll();
+}
+
+// ============ TOAST ============
+
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = 'toast', 2500);
+}
+
+// ============ CLOCK ============
+
+function updateClock() {
+  const now = new Date();
+  const utc2 = new Date(now.getTime() + 2*60*60*1000);
+  const h = String(utc2.getUTCHours()).padStart(2, '0');
+  const m = String(utc2.getUTCMinutes()).padStart(2, '0');
+  const s = String(utc2.getUTCSeconds()).padStart(2, '0');
+  document.getElementById('clock').textContent = h + ':' + m + ':' + s + ' GMT+2';
+}
+
+// ============ INIT ============
+
+updateClock();
+setInterval(updateClock, 1000);
+
+updateAll();
+refreshInterval = setInterval(updateAll, 2000);
+</script>
+</body>
+</html>

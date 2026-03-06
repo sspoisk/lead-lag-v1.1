@@ -1,0 +1,56 @@
+{
+  "exchange": "okx",
+  "trade_mode": "PAPER",
+  "port": 8090,
+  "debug": false,
+  "leader": {
+    "symbols": [
+      "BTC"
+    ],
+    "impulse_threshold": 0.0018,
+    "timeframe": "1m",
+    "cooldown_seconds": 60,
+    "quality": {
+      "enabled": true,
+      "min_quality": 0.001,
+      "gap_weak_sec": 120,
+      "gap_strong_sec": 900,
+      "gap_min_factor": 0.5,
+      "gap_max_factor": 2
+    }
+  },
+  "follower": {
+    "max_active": 30,
+    "min_wr": 46,
+    "min_pf": 0.8,
+    "min_trades": 3,
+    "rolling_window": 50,
+    "degrade_wr": 45,
+    "degrade_pf": 1.1
+  },
+  "trading": {
+    "enable_long": true,
+    "enable_short": true,
+    "force_direction": null,
+    "tp_pct": 0.3,
+    "sl_pct": 0.3,
+    "hold_max_sec": 3,
+    "fee_pct": 0.05,
+    "position_size": 10,
+    "leverage": 2,
+    "max_positions": 15,
+    "initial_balance": 1000.0
+  },
+  "scanner": {
+    "interval_min": 20,
+    "lookback_hours": 12,
+    "top_pairs": 240,
+    "min_volume_usd": 200000
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": "",
+    "prefix": "[LeadLag]"
+  }
+}
