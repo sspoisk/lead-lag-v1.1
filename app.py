@@ -58,6 +58,7 @@ from database import db, get_gmt2_str, get_gmt2_time
 from scanner import PairScanner
 from pair_manager import PairManager
 from trader import LeadLagTrader
+from btc_ws import BtcWebSocket
 
 # ============================================================
 # Flask app
@@ -242,65 +243,128 @@ class ScannerThread(threading.Thread):
             state.health['scanner'] = 'ok (no results)'
 
 
-class TraderThread(threading.Thread):
-    """Monitors BTC for impulses and opens positions."""
+class BtcWsThread(threading.Thread):
+    """
+    V1.1: BTC WebSocket monitor.
+    Replaces the old REST polling TraderThread.
+    Detects impulses in real-time (< 1 second from BTC move to all orders placed).
+    """
     daemon = True
 
     def __init__(self):
-        super().__init__(name='TraderThread')
+        super().__init__(name='BtcWsThread')
+        self._ws: Optional[BtcWebSocket] = None
 
     def run(self):
-        time.sleep(15)  # Wait for scanner first run
-        logger.info("[TRADER-THREAD] Started")
+        # Wait for scanner to populate pairs
+        time.sleep(15)
+        logger.info("[WS-THREAD] Starting BTC WebSocket monitor...")
 
+        self._ws = BtcWebSocket(
+            config_getter=load_config,
+            on_impulse=self._on_impulse,
+            on_price=self._on_price,
+        )
+        self._ws.start()
+
+        # Keep thread alive while running
         while state.running:
-            try:
-                if not state.trader.paused:
-                    self._check_impulse()
-            except Exception as e:
-                logger.error(f"[TRADER-THREAD] Error: {e}")
-
             time.sleep(1)
 
-    def _check_impulse(self):
-        impulse = state.trader.check_btc_impulse()
-        if not impulse:
+        if self._ws:
+            self._ws.stop()
+
+    def _on_price(self, price: float):
+        """Update BTC price in trader state."""
+        if state.trader:
+            state.trader.btc_price = price
+
+    def _on_impulse(self, direction: str, magnitude: float, price: float, ref_price: float):
+        """Called by BtcWebSocket when impulse detected. Runs in WS thread."""
+        if not state.trader or state.trader.paused:
             return
 
-        # Save ALL impulses to DB (including skipped ones)
-        impulse_id = db.save_impulse(impulse)
+        cfg = load_config()
 
-        # Only open positions for accepted impulses
-        if impulse.get('status') != 'accepted':
-            return
+        # Direction filter
+        trading_cfg = cfg.get('trading', {})
+        force = trading_cfg.get('force_direction')
+        if force in ('LONG', 'SHORT'):
+            direction = force
+        else:
+            if direction == 'LONG' and not trading_cfg.get('enable_long', True):
+                logger.info(f"[WS-THREAD] SKIP: LONG disabled")
+                self._save_impulse(direction, magnitude, price, ref_price, 0, 'skip_long_disabled')
+                return
+            if direction == 'SHORT' and not trading_cfg.get('enable_short', True):
+                logger.info(f"[WS-THREAD] SKIP: SHORT disabled")
+                self._save_impulse(direction, magnitude, price, ref_price, 0, 'skip_short_disabled')
+                return
 
         # Get active pairs
-        pairs = state.pair_manager.get_pairs_info()
+        pairs = state.pair_manager.get_pairs_info() if state.pair_manager else []
         if not pairs:
-            logger.info("[TRADER-THREAD] No active pairs, skipping impulse")
+            logger.info("[WS-THREAD] No active pairs, skipping impulse")
+            self._save_impulse(direction, magnitude, price, ref_price, 0, 'skip_no_pairs')
             return
 
+        full_symbols = [p['full_symbol'] for p in pairs]
+        symbol_map   = {p['full_symbol']: p['symbol'] for p in pairs}
+
+        # ---------------------------------------------------------------
+        # Fetch ALL alt prices in ONE API call
+        # ---------------------------------------------------------------
+        prefetched: Dict[str, float] = {}
+        try:
+            tickers = state.exchange.fetch_tickers(full_symbols)
+            for full_sym, t in tickers.items():
+                p = t.get('last') or t.get('close') or 0
+                if p:
+                    short = symbol_map.get(full_sym, full_sym.split('/')[0])
+                    prefetched[short] = float(p)
+        except Exception as e:
+            logger.warning(f"[WS-THREAD] fetch_tickers failed ({e}), will use cached prices")
+
+        # Save impulse to DB
+        impulse_id = self._save_impulse(direction, magnitude, price, ref_price, 0, 'accepted')
+
+        # Open all positions fast
         symbols = [(p['symbol'], p['full_symbol']) for p in pairs]
-        direction = impulse['direction']
+        opened = state.trader.open_positions_fast(
+            symbols, direction, impulse_id, magnitude, prefetched
+        )
 
-        # Open positions
-        opened = state.trader.open_positions(
-            symbols, direction, impulse_id, impulse['magnitude'])
-
-        # Update impulse record
         db.update_impulse_followers(impulse_id, opened)
 
-        logger.info(f"[TRADER-THREAD] Impulse {direction} {abs(impulse['magnitude'])*100:.2f}% "
-                    f"→ opened {opened}/{len(symbols)} positions")
+        logger.info(
+            f"[WS-THREAD] Impulse {direction} {abs(magnitude)*100:.3f}% "
+            f"→ opened {opened}/{len(symbols)} positions"
+        )
+        state.health['trader'] = 'ok'
 
-        # Telegram
         if state.telegram and opened > 0:
             state.telegram.send(
-                f"BTC {direction} {abs(impulse['magnitude'])*100:.2f}%\n"
+                f"⚡ BTC {direction} {abs(magnitude)*100:.3f}%\n"
                 f"Opened {opened} positions: "
-                f"{', '.join(s[0] for s in symbols[:opened])}")
+                f"{', '.join(s[0] for s in symbols[:opened])}"
+            )
 
-        state.health['trader'] = 'ok'
+    def _save_impulse(self, direction, magnitude, price, ref_price,
+                      n_followers, status) -> int:
+        impulse = {
+            'timestamp': get_gmt2_str(),
+            'leader': 'BTC',
+            'direction': direction,
+            'magnitude': round(magnitude, 6),
+            'candle_open': round(ref_price, 2),
+            'candle_close': round(price, 2),
+            'n_followers_entered': n_followers,
+            'gap_seconds': 0,
+            'gap_factor': 1.0,
+            'quality': round(abs(magnitude), 6),
+            'status': status,
+        }
+        return db.save_impulse(impulse)
 
 
 class PriceThread(threading.Thread):
@@ -568,7 +632,7 @@ def api_restart():
     db.log('control', 'Restart requested from UI', {})
     def _restart():
         time.sleep(1)
-        os.system('systemctl restart lead-lag-trader.service')
+        os.system('systemctl restart lead-lag-v1.1.service')
     threading.Thread(target=_restart, daemon=True).start()
     return jsonify({'status': 'restarting'})
 
@@ -610,11 +674,11 @@ def main():
     state.running = True
 
     scanner_thread = ScannerThread()
-    trader_thread = TraderThread()
-    price_thread = PriceThread()
+    ws_thread      = BtcWsThread()      # V1.1: WebSocket replaces REST polling
+    price_thread   = PriceThread()
 
     scanner_thread.start()
-    trader_thread.start()
+    ws_thread.start()
     price_thread.start()
 
     logger.info("[APP] Background threads started")

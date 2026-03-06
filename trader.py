@@ -1,8 +1,7 @@
 """
 LeadLagTrader — trading engine.
 
-Monitors BTC 1m candles for impulses.
-On impulse: opens positions in all active follower pairs in BTC direction.
+V1.1: BTC monitored via WebSocket (real-time), orders placed in parallel.
 Manages TP/SL/time-based exits.
 """
 
@@ -11,6 +10,7 @@ import os
 import time
 import threading
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict, field
 from typing import Dict, List, Optional, Tuple
@@ -423,6 +423,22 @@ class LeadLagTrader:
         except (ValueError, TypeError):
             hold_sec = 0
 
+        # LIVE: place market close order
+        if pos.trade_mode == 'LIVE' and self.exchange:
+            try:
+                close_side = 'sell' if pos.side == 'LONG' else 'buy'
+                market = self.exchange.market(pos.symbol)
+                contract_size = float(market.get('contractSize') or 1)
+                amount = (pos.size_usdt * pos.leverage) / pos.entry_price / contract_size
+                amount = float(self.exchange.amount_to_precision(pos.symbol, amount))
+                self.exchange.create_order(
+                    pos.symbol, 'market', close_side, amount,
+                    params={'tdMode': 'cross', 'reduceOnly': True}
+                )
+                logger.info(f"[LIVE-CLOSE] {pos.id} {pos.short_symbol} {reason}")
+            except Exception as e:
+                logger.error(f"[LIVE-CLOSE] Failed {pos.short_symbol}: {e}")
+
         # Save to DB
         trade_data = {
             'trade_id': pos.id,
@@ -458,6 +474,142 @@ class LeadLagTrader:
             if self.close_position(sym, reason):
                 count += 1
         return count
+
+    # ------------------------------------------------------------------
+    # V1.1: Fast open — prefetched prices + parallel live orders
+    # ------------------------------------------------------------------
+
+    def open_positions_fast(self,
+                            active_symbols: List[Tuple[str, str]],
+                            direction: str,
+                            impulse_id: int,
+                            impulse_magnitude: float,
+                            prefetched_prices: Dict[str, float] = None) -> int:
+        """
+        Open positions using prefetched prices (one fetch_tickers call).
+        PAPER: creates Position objects instantly.
+        LIVE:  places all market orders in parallel via ThreadPoolExecutor.
+        """
+        cfg = self.config.get('trading', {})
+        tp_pct     = cfg.get('tp_pct', 0.5) / 100
+        sl_pct     = cfg.get('sl_pct', 0.3) / 100
+        position_size = cfg.get('position_size', 10)
+        leverage   = cfg.get('leverage', 2)
+        max_pos    = cfg.get('max_positions', 10)
+        hold_max   = cfg.get('hold_max_sec', 30)
+        trade_mode = self.config.get('trade_mode', 'PAPER')
+
+        prices = prefetched_prices or {}
+
+        # Build list of what to open
+        to_open = []
+        for short_sym, full_sym in active_symbols:
+            if short_sym in self.positions:
+                continue
+            if len(self.positions) + len(to_open) >= max_pos:
+                break
+
+            price = prices.get(short_sym) or prices.get(full_sym) or self.prices.get(short_sym, 0)
+            if price <= 0:
+                continue
+
+            sl = price * (1 - sl_pct) if direction == 'LONG' else price * (1 + sl_pct)
+            tp = price * (1 + tp_pct) if direction == 'LONG' else price * (1 - tp_pct)
+            to_open.append((short_sym, full_sym, price, sl, tp))
+
+        if not to_open:
+            return 0
+
+        if trade_mode == 'LIVE':
+            return self._open_live_parallel(to_open, direction, impulse_id,
+                                            impulse_magnitude, position_size,
+                                            leverage, hold_max)
+        else:
+            return self._open_paper_batch(to_open, direction, impulse_id,
+                                          impulse_magnitude, position_size,
+                                          leverage, hold_max)
+
+    def _open_paper_batch(self, to_open, direction, impulse_id, magnitude,
+                          position_size, leverage, hold_max) -> int:
+        opened = 0
+        for short_sym, full_sym, price, sl, tp in to_open:
+            trade_id = self._next_trade_id()
+            pos = Position(
+                id=trade_id, symbol=full_sym, short_symbol=short_sym,
+                side=direction, entry_price=price, current_price=price,
+                size_usdt=position_size, leverage=leverage,
+                stop_loss=sl, take_profit=tp, status="OPEN",
+                opened_at=get_gmt2_str(), impulse_id=impulse_id,
+                impulse_magnitude=magnitude, hold_max_seconds=hold_max,
+                trade_mode='PAPER'
+            )
+            with self.lock:
+                self.positions[short_sym] = pos
+            logger.info(f"[OPEN] {trade_id} {short_sym} {direction} @ {price:.4f} "
+                        f"SL={sl:.4f} TP={tp:.4f}")
+            opened += 1
+        self._save_state()
+        return opened
+
+    def _open_live_parallel(self, to_open, direction, impulse_id, magnitude,
+                            position_size, leverage, hold_max) -> int:
+        """
+        Place all market orders simultaneously via ThreadPoolExecutor.
+        Each thread places one order — they all fire at the same time.
+        """
+        side = 'buy' if direction == 'LONG' else 'sell'
+
+        def place_one(args):
+            short_sym, full_sym, price, sl, tp = args
+            try:
+                market = self.exchange.market(full_sym)
+                contract_size = float(market.get('contractSize') or 1)
+                notional = position_size * leverage
+                amount = notional / price / contract_size
+                amount = float(self.exchange.amount_to_precision(full_sym, amount))
+
+                order = self.exchange.create_order(
+                    full_sym, 'market', side, amount,
+                    params={'tdMode': 'cross', 'lever': str(leverage)}
+                )
+                return (short_sym, full_sym, price, sl, tp, order, None)
+            except Exception as e:
+                logger.error(f"[LIVE] Order failed {short_sym}: {e}")
+                return (short_sym, full_sym, price, sl, tp, None, str(e))
+
+        # Fire all orders at the same time
+        t_start = time.time()
+        with ThreadPoolExecutor(max_workers=len(to_open)) as pool:
+            futures = [pool.submit(place_one, args) for args in to_open]
+            results = [f.result() for f in as_completed(futures)]
+
+        elapsed_ms = (time.time() - t_start) * 1000
+        logger.info(f"[LIVE] Batch of {len(to_open)} orders placed in {elapsed_ms:.0f}ms")
+
+        opened = 0
+        for short_sym, full_sym, price, sl, tp, order, err in results:
+            if err or not order:
+                continue
+
+            fill_price = float(order.get('average') or order.get('price') or price)
+            trade_id = self._next_trade_id()
+            pos = Position(
+                id=trade_id, symbol=full_sym, short_symbol=short_sym,
+                side=direction, entry_price=fill_price, current_price=fill_price,
+                size_usdt=position_size, leverage=leverage,
+                stop_loss=sl, take_profit=tp, status="OPEN",
+                opened_at=get_gmt2_str(), impulse_id=impulse_id,
+                impulse_magnitude=magnitude, hold_max_seconds=hold_max,
+                trade_mode='LIVE'
+            )
+            with self.lock:
+                self.positions[short_sym] = pos
+            logger.info(f"[LIVE-OPEN] {trade_id} {short_sym} {direction} "
+                        f"@ {fill_price:.4f} SL={sl:.4f} TP={tp:.4f}")
+            opened += 1
+
+        self._save_state()
+        return opened
 
     def get_open_positions(self) -> List[Dict]:
         with self.lock:

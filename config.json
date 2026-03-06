@@ -8,7 +8,7 @@
       "BTC"
     ],
     "impulse_threshold": 0.0018,
-    "timeframe": "1m",
+    "ws_window_sec": 30,
     "cooldown_seconds": 60,
     "quality": {
       "enabled": true,
