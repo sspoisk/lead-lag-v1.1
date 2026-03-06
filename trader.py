@@ -325,9 +325,8 @@ class LeadLagTrader:
                        impulse_magnitude: float) -> int:
         """
         Open positions in all active follower pairs.
-        1. Batch-fetch ALL prices in one API call.
-        2. PAPER → _open_paper_batch()
-           LIVE  → _open_live_batch() (OKX batch-orders + attachAlgoOrds)
+        Price logic identical to V1: use stale cache, fetch only if missing.
+        Execution: PAPER → _open_paper_batch(), LIVE → _open_live_batch().
         """
         cfg = self.config.get('trading', {})
         tp_pct        = cfg.get('tp_pct', 0.5) / 100
@@ -338,53 +337,34 @@ class LeadLagTrader:
         hold_max      = cfg.get('hold_max_sec', 30)
         trade_mode    = self.config.get('trade_mode', 'PAPER')
 
-        # Build candidate list
-        candidates = []
+        # V1 logic: iterate symbol by symbol, use stale cache, fetch only if missing
+        to_open = []
         for short_sym, full_sym in active_symbols:
             if short_sym in self.positions:
                 continue
-            if len(self.positions) + len(candidates) >= max_positions:
+            if len(self.positions) + len(to_open) >= max_positions:
                 break
-            candidates.append((short_sym, full_sym))
 
-        if not candidates:
-            self._save_state()
-            return 0
+            # Use cached price (pre-impulse, stale = correct entry)
+            price = self.prices.get(short_sym)
+            if not price:
+                try:
+                    ticker = self.exchange.fetch_ticker(full_sym)
+                    price = ticker.get('last', 0)
+                    self.prices[short_sym] = price
+                except Exception as e:
+                    logger.error(f"[TRADER] Price fetch {short_sym}: {e}")
+                    continue
 
-        # Use cached prices (from PriceThread, pre-impulse) — same as V1.
-        # Fresh fetch only for symbols not yet in cache.
-        prices: Dict[str, float] = {}
-        missing = []
-        for short_sym, full_sym in candidates:
-            if short_sym in self.prices:
-                prices[short_sym] = self.prices[short_sym]
-            else:
-                missing.append((short_sym, full_sym))
-
-        if missing:
-            try:
-                tickers = self.exchange.fetch_tickers([fs for _, fs in missing])
-                for sym, t in tickers.items():
-                    price = t.get('last', 0)
-                    if price:
-                        short = sym.split('/')[0].replace(':USDT', '')
-                        prices[short] = price
-            except Exception as e:
-                logger.error(f"[TRADER] Price fetch failed: {e}")
-
-        self.prices.update(prices)
-
-        # Build to_open list
-        to_open = []
-        for short_sym, full_sym in candidates:
-            price = prices.get(short_sym, 0)
             if price <= 0:
                 continue
+
             sl = price * (1 - sl_pct) if direction == 'LONG' else price * (1 + sl_pct)
             tp = price * (1 + tp_pct) if direction == 'LONG' else price * (1 - tp_pct)
             to_open.append((short_sym, full_sym, price, sl, tp))
 
         if not to_open:
+            self._save_state()
             return 0
 
         # LIVE: validate margin against real balance
