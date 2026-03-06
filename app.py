@@ -304,11 +304,16 @@ class TraderThread(threading.Thread):
 
 
 class PriceThread(threading.Thread):
-    """Updates prices for open positions and checks exits."""
+    """Updates prices for open positions and checks exits.
+    When idle (no open positions), refreshes cache for all active pairs every
+    IDLE_INTERVAL seconds so the next impulse enters at pre-reaction prices.
+    """
     daemon = True
+    IDLE_INTERVAL = 5  # seconds between idle cache refreshes
 
     def __init__(self):
         super().__init__(name='PriceThread')
+        self._idle_ticks = 0
 
     def run(self):
         time.sleep(20)
@@ -324,9 +329,31 @@ class PriceThread(threading.Thread):
 
     def _update_prices(self):
         positions = state.trader.get_open_positions()
+
         if not positions:
+            # Idle: refresh cache every IDLE_INTERVAL seconds so it doesn't go stale
+            self._idle_ticks += 1
+            if self._idle_ticks < self.IDLE_INTERVAL:
+                return
+            self._idle_ticks = 0
+            active_full = state.pair_manager.get_active_pairs()
+            if not active_full:
+                return
+            try:
+                tickers = state.exchange.fetch_tickers(active_full)
+                idle_prices = {}
+                for sym, t in tickers.items():
+                    price = t.get('last', 0)
+                    if price:
+                        short = sym.split('/')[0].replace(':USDT', '')
+                        idle_prices[short] = price
+                if idle_prices:
+                    state.trader.prices.update(idle_prices)
+            except Exception as e:
+                logger.debug(f"[PRICE-THREAD] Idle cache refresh error: {e}")
             return
 
+        self._idle_ticks = 0
         # Fetch tickers for all open position symbols
         symbols = list(set(p['symbol'] for p in positions))
         prices = {}

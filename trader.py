@@ -351,21 +351,26 @@ class LeadLagTrader:
             self._save_state()
             return 0
 
-        # Batch-fetch prices (1 API call)
-        full_syms = [fs for _, fs in candidates]
+        # Use cached prices (from PriceThread, pre-impulse) — same as V1.
+        # Fresh fetch only for symbols not yet in cache.
         prices: Dict[str, float] = {}
-        try:
-            tickers = self.exchange.fetch_tickers(full_syms)
-            for sym, t in tickers.items():
-                price = t.get('last', 0)
-                if price:
-                    short = sym.split('/')[0].replace(':USDT', '')
-                    prices[short] = price
-        except Exception as e:
-            logger.error(f"[TRADER] Batch price fetch failed: {e}")
-            for short, _ in candidates:
-                if short in self.prices:
-                    prices[short] = self.prices[short]
+        missing = []
+        for short_sym, full_sym in candidates:
+            if short_sym in self.prices:
+                prices[short_sym] = self.prices[short_sym]
+            else:
+                missing.append((short_sym, full_sym))
+
+        if missing:
+            try:
+                tickers = self.exchange.fetch_tickers([fs for _, fs in missing])
+                for sym, t in tickers.items():
+                    price = t.get('last', 0)
+                    if price:
+                        short = sym.split('/')[0].replace(':USDT', '')
+                        prices[short] = price
+            except Exception as e:
+                logger.error(f"[TRADER] Price fetch failed: {e}")
 
         self.prices.update(prices)
 
